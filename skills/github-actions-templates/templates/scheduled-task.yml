@@ -1,0 +1,56 @@
+# 定时任务模板
+name: Scheduled Task
+
+on:
+  schedule:
+    # 每天早上 8 点运行
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    # 支持手动触发
+
+jobs:
+  scheduled-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install requests pandas
+      
+      - name: Run scheduled task
+        run: python scripts/daily_task.py
+      
+      - name: Send notification on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": "🚨 Scheduled task failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Scheduled Task Failed* \n Repository: ${{ github.repository }} \n Workflow: ${{ github.workflow }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_CHANNEL: '#alerts'
+
+      - name: Archive logs
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: task-logs
+          path: logs/
+          retention-days: 30

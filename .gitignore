@@ -1,3 +1,35 @@
+# 敏感文件
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+
+# 配置文件
+config/
+*.json
+!*.example.json
+openclaw.json
+settings/
+
+# 缓存
 node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.tmp/
+
+# 日志
+logs/
 *.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
 .DS_Store
+Thumbs.db

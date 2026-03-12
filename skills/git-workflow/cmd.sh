@@ -1,0 +1,1 @@
+/root/.openclaw/workspace/skills/git-workflow/git-workflow.sh

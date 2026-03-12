@@ -1,0 +1,449 @@
+#!/bin/bash
+# Database Manager - Universal database management tool
+# Supports: MySQL, PostgreSQL, MongoDB, Redis
+
+set -e
+
+VERSION="1.0.0"
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+show_help() {
+    cat << EOF
+Database Manager v${VERSION}
+
+Usage: db <command> [options]
+
+Commands:
+    MySQL:
+        mysql list                  List databases
+        mysql tables <db>          List tables in database
+        mysql query <db> "<sql>"   Execute query
+        mysql dump <db>            Dump database
+        mysql users                List users
+        mysql size <db>            Show database size
+        mysql processlist          Show processes
+
+    PostgreSQL:
+        postgres list              List databases
+        postgres tables <db>       List tables
+        postgres query <db> "<sql>" Execute query
+        postgres dump <db>         Dump database
+        postgres size <db>         Show database size
+        postgres connections       Show connections
+
+    MongoDB:
+        mongo list                 List databases
+        mongo collections <db>    List collections
+        mongo find <db>.<col>      Find documents
+        mongo count <db>.<col>     Count documents
+        mongo indexes <db>.<col>   List indexes
+
+    Redis:
+        redis keys <pattern>       Find keys
+        redis get <key>            Get value
+        redis set <key> <value>    Set value
+        redis del <key>            Delete key
+        redis info                 Server info
+        redis flush                Flush all keys
+
+    Common:
+        backup <type> <target>     Create backup
+        restore <type> <backup>   Restore backup
+        health <type>             Check health
+
+Options:
+    --version    Show version
+    --help       Show this help
+
+Examples:
+    db mysql list
+    db mysql tables myapp
+    db mysql query myapp "SELECT * FROM users"
+    db redis keys "user:*"
+    db health postgres
+EOF
+}
+
+# MySQL commands
+mysql_list() {
+    if command -v mysql &> /dev/null; then
+        mysql -e "SHOW DATABASES;" 2>/dev/null || echo "MySQL not configured"
+    else
+        echo "MySQL client not installed"
+    fi
+}
+
+mysql_tables() {
+    local db=$1
+    if [[ -z "$db" ]]; then
+        echo "Usage: db mysql tables <database>"
+        return 1
+    fi
+    if command -v mysql &> /dev/null; then
+        mysql -e "USE $db; SHOW TABLES;" 2>/dev/null || echo "Cannot access database"
+    else
+        echo "MySQL client not installed"
+    fi
+}
+
+mysql_query() {
+    local db=$1
+    local sql=$2
+    if [[ -z "$db" || -z "$sql" ]]; then
+        echo "Usage: db mysql query <database> \"<sql>\""
+        return 1
+    fi
+    if command -v mysql &> /dev/null; then
+        mysql -e "$sql" $db 2>/dev/null || echo "Query failed"
+    else
+        echo "MySQL client not installed"
+    fi
+}
+
+mysql_users() {
+    if command -v mysql &> /dev/null; then
+        mysql -e "SELECT User, Host FROM mysql.user;" 2>/dev/null || echo "Cannot list users"
+    else
+        echo "MySQL client not installed"
+    fi
+}
+
+mysql_size() {
+    local db=$1
+    if [[ -z "$db" ]]; then
+        echo "Usage: db mysql size <database>"
+        return 1
+    fi
+    if command -v mysql &> /dev/null; then
+        mysql -e "SELECT table_schema AS 'Database', 
+        ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) AS 'Size (MB)' 
+        FROM information_schema.tables 
+        WHERE table_schema = '$db';" 2>/dev/null
+    else
+        echo "MySQL client not installed"
+    fi
+}
+
+mysql_processlist() {
+    if command -v mysql &> /dev/null; then
+        mysql -e "SHOW FULL PROCESSLIST;" 2>/dev/null || echo "Cannot show processes"
+    else
+        echo "MySQL client not installed"
+    fi
+}
+
+# PostgreSQL commands
+postgres_list() {
+    if command -v psql &> /dev/null; then
+        psql -l 2>/dev/null || echo "PostgreSQL not configured"
+    else
+        echo "PostgreSQL client not installed"
+    fi
+}
+
+postgres_tables() {
+    local db=$1
+    if [[ -z "$db" ]]; then
+        echo "Usage: db postgres tables <database>"
+        return 1
+    fi
+    if command -v psql &> /dev/null; then
+        psql -d $db -c "\dt" 2>/dev/null || echo "Cannot access database"
+    else
+        echo "PostgreSQL client not installed"
+    fi
+}
+
+postgres_query() {
+    local db=$1
+    local sql=$2
+    if [[ -z "$db" || -z "$sql" ]]; then
+        echo "Usage: db postgres query <database> \"<sql>\""
+        return 1
+    fi
+    if command -v psql &> /dev/null; then
+        psql -d $db -c "$sql" 2>/dev/null || echo "Query failed"
+    else
+        echo "PostgreSQL client not installed"
+    fi
+}
+
+postgres_size() {
+    local db=$1
+    if [[ -z "$db" ]]; then
+        echo "Usage: db postgres size <database>"
+        return 1
+    fi
+    if command -v psql &> /dev/null; then
+        psql -d $db -c "SELECT pg_database_size('$db') / 1024 / 1024 AS size_mb;" 2>/dev/null
+    else
+        echo "PostgreSQL client not installed"
+    fi
+}
+
+postgres_connections() {
+    if command -v psql &> /dev/null; then
+        psql -c "SELECT datname, numbackends FROM pg_stat_database;" 2>/dev/null || echo "Cannot show connections"
+    else
+        echo "PostgreSQL client not installed"
+    fi
+}
+
+# MongoDB commands
+mongo_list() {
+    if command -v mongosh &> /dev/null; then
+        mongosh --quiet --eval "db.getMongo().getDBNames()" 2>/dev/null || echo "MongoDB not configured"
+    elif command -v mongo &> /dev/null; then
+        mongo --quiet --eval "db.getMongo().getDBNames()" 2>/dev/null || echo "MongoDB not configured"
+    else
+        echo "MongoDB client not installed"
+    fi
+}
+
+mongo_collections() {
+    local db=$1
+    if [[ -z "$db" ]]; then
+        echo "Usage: db mongo collections <database>"
+        return 1
+    fi
+    if command -v mongosh &> /dev/null; then
+        mongosh --quiet --eval "db.getSiblingDB('$db').getCollectionNames()" 2>/dev/null
+    elif command -v mongo &> /dev/null; then
+        mongo --quiet --eval "db.getSiblingDB('$db').getCollectionNames()" 2>/dev/null
+    else
+        echo "MongoDB client not installed"
+    fi
+}
+
+mongo_find() {
+    local col=$1
+    local limit=${2:-10}
+    if [[ -z "$col" ]]; then
+        echo "Usage: db mongo find <database>.<collection> [limit]"
+        return 1
+    fi
+    local db="${col%%.*}"
+    local collection="${col#*.}"
+    if command -v mongosh &> /dev/null; then
+        mongosh --quiet --eval "db.getSiblingDB('$db').$collection.find().limit($limit).toJSON()" 2>/dev/null
+    elif command -v mongo &> /dev/null; then
+        mongo --quiet --eval "db.getSiblingDB('$db').$collection.find().limit($limit).toJSON()" 2>/dev/null
+    else
+        echo "MongoDB client not installed"
+    fi
+}
+
+mongo_count() {
+    local col=$1
+    if [[ -z "$col" ]]; then
+        echo "Usage: db mongo count <database>.<collection>"
+        return 1
+    fi
+    local db="${col%%.*}"
+    local collection="${col#*.}"
+    if command -v mongosh &> /dev/null; then
+        mongosh --quiet --eval "db.getSiblingDB('$db').$collection.countDocuments()" 2>/dev/null
+    elif command -v mongo &> /dev/null; then
+        mongo --quiet --eval "db.getSiblingDB('$db').$collection.countDocuments()" 2>/dev/null
+    else
+        echo "MongoDB client not installed"
+    fi
+}
+
+mongo_indexes() {
+    local col=$1
+    if [[ -z "$col" ]]; then
+        echo "Usage: db mongo indexes <database>.<collection>"
+        return 1
+    fi
+    local db="${col%%.*}"
+    local collection="${col#*.}"
+    if command -v mongosh &> /dev/null; then
+        mongosh --quiet --eval "db.getSiblingDB('$db').$collection.getIndexes()" 2>/dev/null
+    elif command -v mongo &> /dev/null; then
+        mongo --quiet --eval "db.getSiblingDB('$db').$collection.getIndexes()" 2>/dev/null
+    else
+        echo "MongoDB client not installed"
+    fi
+}
+
+# Redis commands
+redis_keys() {
+    local pattern=${1:-"*"}
+    if command -v redis-cli &> /dev/null; then
+        redis-cli KEYS "$pattern" 2>/dev/null || echo "Redis not configured"
+    else
+        echo "Redis client not installed"
+    fi
+}
+
+redis_get() {
+    local key=$1
+    if [[ -z "$key" ]]; then
+        echo "Usage: db redis get <key>"
+        return 1
+    fi
+    if command -v redis-cli &> /dev/null; then
+        redis-cli GET "$key" 2>/dev/null
+    else
+        echo "Redis client not installed"
+    fi
+}
+
+redis_set() {
+    local key=$1
+    local value=$2
+    if [[ -z "$key" || -z "$value" ]]; then
+        echo "Usage: db redis set <key> <value>"
+        return 1
+    fi
+    if command -v redis-cli &> /dev/null; then
+        redis-cli SET "$key" "$value" 2>/dev/null && echo "OK"
+    else
+        echo "Redis client not installed"
+    fi
+}
+
+redis_del() {
+    local key=$1
+    if [[ -z "$key" ]]; then
+        echo "Usage: db redis del <key>"
+        return 1
+    fi
+    if command -v redis-cli &> /dev/null; then
+        redis-cli DEL "$key" 2>/dev/null
+    else
+        echo "Redis client not installed"
+    fi
+}
+
+redis_info() {
+    if command -v redis-cli &> /dev/null; then
+        redis-cli INFO 2>/dev/null | head -20
+    else
+        echo "Redis client not installed"
+    fi
+}
+
+redis_flush() {
+    if command -v redis-cli &> /dev/null; then
+        redis-cli FLUSHALL 2>/dev/null && echo "All keys flushed"
+    else
+        echo "Redis client not installed"
+    fi
+}
+
+redis_ttl() {
+    local key=$1
+    if [[ -z "$key" ]]; then
+        echo "Usage: db redis ttl <key>"
+        return 1
+    fi
+    if command -v redis-cli &> /dev/null; then
+        redis-cli TTL "$key" 2>/dev/null
+    else
+        echo "Redis client not installed"
+    fi
+}
+
+# Health check
+db_health() {
+    local type=$1
+    case $type in
+        mysql)
+            if command -v mysql &> /dev/null; then
+                mysql -e "SELECT 'OK' AS status;" 2>/dev/null && echo "MySQL: Healthy" || echo "MySQL: Unhealthy"
+            else
+                echo "MySQL client not installed"
+            fi
+            ;;
+        postgres)
+            if command -v psql &> /dev/null; then
+                psql -c "SELECT 'OK' AS status;" 2>/dev/null && echo "PostgreSQL: Healthy" || echo "PostgreSQL: Unhealthy"
+            else
+                echo "PostgreSQL client not installed"
+            fi
+            ;;
+        mongo)
+            if command -v mongosh &> /dev/null; then
+                mongosh --quiet --eval "db.adminCommand('ping')" 2>/dev/null | grep -q "ok" && echo "MongoDB: Healthy" || echo "MongoDB: Unhealthy"
+            elif command -v mongo &> /dev/null; then
+                mongo --eval "db.adminCommand('ping')" 2>/dev/null | grep -q "ok" && echo "MongoDB: Healthy" || echo "MongoDB: Unhealthy"
+            else
+                echo "MongoDB client not installed"
+            fi
+            ;;
+        redis)
+            if command -v redis-cli &> /dev/null; then
+                redis-cli PING 2>/dev/null | grep -q "PONG" && echo "Redis: Healthy" || echo "Redis: Unhealthy"
+            else
+                echo "Redis client not installed"
+            fi
+            ;;
+        *)
+            echo "Usage: db health <mysql|postgres|mongo|redis>"
+            ;;
+    esac
+}
+
+# Main command parsing
+case "$1" in
+    --version)
+        echo "db version $VERSION"
+        ;;
+    --help)
+        show_help
+        ;;
+    mysql)
+        case "$2" in
+            list) mysql_list ;;
+            tables) mysql_tables "$3" ;;
+            query) mysql_query "$3" "$4" ;;
+            users) mysql_users ;;
+            size) mysql_size "$3" ;;
+            processlist) mysql_processlist ;;
+            *) echo "Unknown mysql command: $2" ;;
+        esac
+        ;;
+    postgres)
+        case "$2" in
+            list) postgres_list ;;
+            tables) postgres_tables "$3" ;;
+            query) postgres_query "$3" "$4" ;;
+            size) postgres_size "$3" ;;
+            connections) postgres_connections ;;
+            *) echo "Unknown postgres command: $2" ;;
+        esac
+        ;;
+    mongo)
+        case "$2" in
+            list) mongo_list ;;
+            collections) mongo_collections "$3" ;;
+            find) mongo_find "$3" "$4" ;;
+            count) mongo_count "$3" ;;
+            indexes) mongo_indexes "$3" ;;
+            *) echo "Unknown mongo command: $2" ;;
+        esac
+        ;;
+    redis)
+        case "$2" in
+            keys) redis_keys "$3" ;;
+            get) redis_get "$3" ;;
+            set) redis_set "$3" "$4" ;;
+            del) redis_del "$3" ;;
+            info) redis_info ;;
+            flush) redis_flush ;;
+            ttl) redis_ttl "$3" ;;
+            *) echo "Unknown redis command: $2" ;;
+        esac
+        ;;
+    health)
+        db_health "$2"
+        ;;
+    *)
+        show_help
+        ;;
+esac

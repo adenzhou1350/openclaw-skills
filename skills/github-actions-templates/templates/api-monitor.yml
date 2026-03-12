@@ -1,0 +1,42 @@
+# API 监控模板
+name: API Monitor
+
+on:
+  schedule:
+    # 每 5 分钟检查一次
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'API URL to test'
+        required: true
+        default: 'https://api.example.com/health'
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Monitor API
+        id: monitor
+        uses: jtalk/url-health-check-action@v3
+        with:
+          url: ${{ github.event.inputs.api_url || 'https://api.example.com/health' }}
+          timeout: 10
+          expected-status: 200
+      
+      - name: Send success notification
+        if: steps.monitor.outcome == 'success'
+        run: echo "API is healthy"
+      
+      - name: Send failure notification
+        if: steps.monitor.outcome == 'failure'
+        run: |
+          echo "API is down!"
+          curl -s -X POST "${{ secrets.PHONE_WEBHOOK }}" \
+            -H "Content-Type: application/json" \
+            -d '{"msg": "API Monitor Alert: API is down!"}'
+      
+      - name: Record metrics
+        if: always()
+        run: |
+          echo "Monitor result: ${{ steps.monitor.outcome }}" >> metrics.log

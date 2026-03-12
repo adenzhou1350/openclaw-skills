@@ -1,0 +1,512 @@
+#!/bin/bash
+
+# JSON Tools - JSON 处理工具集
+# 支持格式化、验证、压缩、比较等功能
+
+VERSION="1.0.0"
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+show_help() {
+    cat << EOF
+JSON Tools v${VERSION}
+
+用法: json <命令> [参数]
+
+命令:
+    format <file>           格式化 JSON (美化输出)
+    validate <file>         验证 JSON 语法
+    minify <file>          压缩 JSON (去除空白)
+    prettify <file>        美化输出 (带颜色)
+    compare <file1> <file2> 比较两个 JSON 文件
+    extract <file> <path>  提取 JSON 路径 (如: users[0].name)
+    query <file> <expr>    jq 风格查询表达式
+    to-csv <file>          JSON 数组转 CSV
+    from-csv <file>        CSV 转 JSON 数组
+    stats <file>           显示 JSON 统计信息
+    diff <file1> <file2>  显示 JSON 差异
+
+示例:
+    json format data.json
+    json validate config.json
+    json minify data.json > data.min.json
+    json compare file1.json file2.json
+    json extract data.json "users[0].name"
+    json to-csv users.json > users.csv
+
+注意: 也可以从 stdin 读取:
+    echo '{"a":1}' | json format
+    curl -s API_URL | json validate
+
+EOF
+}
+
+# 检查 JSON 是否有效
+validate_json() {
+    local input="$1"
+    local content
+    
+    if [[ -f "$input" ]]; then
+        content=$(cat "$input")
+    else
+        content="$input"
+    fi
+    
+    if [[ -z "$content" ]]; then
+        # 尝试从 stdin 读取
+        if [[ ! -t 0 ]]; then
+            content=$(cat)
+        else
+            echo -e "${RED}错误: 无输入内容${NC}"
+            exit 1
+        fi
+    fi
+    
+    # 使用 python3 验证
+    if command -v python3 &> /dev/null; then
+        python3 -c "import json; json.loads('''$content''')" 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            echo -e "${GREEN}✓ JSON 格式有效${NC}"
+            return 0
+        else
+            echo -e "${RED}✗ JSON 格式无效${NC}"
+            return 1
+        fi
+    elif command -v node &> /dev/null; then
+        node -e "JSON.parse('$content')" 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            echo -e "${GREEN}✓ JSON 格式有效${NC}"
+            return 0
+        else
+            echo -e "${RED}✗ JSON 格式无效${NC}"
+            return 1
+        fi
+    else
+        echo -e "${YELLOW}警告: 未找到 python3 或 node，使用基本验证${NC}"
+        # 基本验证：检查括号匹配
+        local open=$(echo "$content" | grep -o '{' | wc -l)
+        local close=$(echo "$content" | grep -o '}' | wc -l)
+        local arr_open=$(echo "$content" | grep -o '\[' | wc -l)
+        local arr_close=$(echo "$content" | grep -o '\]' | wc -l)
+        
+        if [[ $open -eq $close && $arr_open -eq $arr_close ]]; then
+            echo -e "${GREEN}✓ JSON 括号匹配${NC}"
+            return 0
+        else
+            echo -e "${RED}✗ JSON 括号不匹配${NC}"
+            return 1
+        fi
+    fi
+}
+
+# 格式化 JSON
+cmd_format() {
+    local input="$1"
+    local content
+    
+    if [[ -f "$input" ]]; then
+        content=$(cat "$input")
+    elif [[ ! -t 0 ]]; then
+        content=$(cat)
+    else
+        echo -e "${RED}错误: 请提供 JSON 文件或从 stdin 输入${NC}"
+        exit 1
+    fi
+    
+    if command -v python3 &> /dev/null; then
+        python3 -c "import json; print(json.dumps(json.loads('''$content'''), indent=2, ensure_ascii=False))"
+    elif command -v node &> /dev/null; then
+        node -e "console.log(JSON.stringify(JSON.parse(\`$content\`), null, 2))"
+    else
+        echo -e "${RED}错误: 需要 python3 或 node 来格式化 JSON${NC}"
+        exit 1
+    fi
+}
+
+# 压缩 JSON
+cmd_minify() {
+    local input="$1"
+    local content
+    
+    if [[ -f "$input" ]]; then
+        content=$(cat "$input")
+    elif [[ ! -t 0 ]]; then
+        content=$(cat)
+    else
+        echo -e "${RED}错误: 请提供 JSON 文件或从 stdin 输入${NC}"
+        exit 1
+    fi
+    
+    if command -v python3 &> /dev/null; then
+        python3 -c "import json; print(json.dumps(json.loads('''$content'''), separators=(',', ':')))"
+    elif command -v node &> /dev/null; then
+        node -e "console.log(JSON.stringify(JSON.parse(\`$content\`)))"
+    else
+        echo -e "${RED}错误: 需要 python3 或 node 来压缩 JSON${NC}"
+        exit 1
+    fi
+}
+
+# 美化输出 (带颜色)
+cmd_prettify() {
+    local input="$1"
+    local content
+    
+    if [[ -f "$input" ]]; then
+        content=$(cat "$input")
+    elif [[ ! -t 0 ]]; then
+        content=$(cat)
+    else
+        echo -e "${RED}错误: 请提供 JSON 文件或从 stdin 输入${NC}"
+        exit 1
+    fi
+    
+    # 使用 python3 带颜色输出
+    if command -v python3 &> /dev/null; then
+        python3 << 'PYEOF'
+import json
+import sys
+
+content = sys.stdin.read()
+try:
+    data = json.loads(content)
+    # 自定义颜色输出
+    output = json.dumps(data, indent=2, ensure_ascii=False)
+    # 简单着色
+    output = output.replace('{', '\033[33m{\033[0m')
+    output = output.replace('}', '\033[33m}\033[0m')
+    output = output.replace('[', '\033[36m[\033[0m')
+    output = output.replace(']', '\033[36m]\033[0m')
+    output = output.replace('": "', '\033[32m": "\033[0m')
+    output = output.replace('": ', '\033[32m": \033[0m')
+    output = output.replace(': "', ': \033[31m"')
+    output = output.replace(': ', ': \033[31m')
+    print(output)
+except:
+    print(content)
+PYEOF
+    else
+        cmd_format "$input"
+    fi
+}
+
+# 比较两个 JSON 文件
+cmd_compare() {
+    local file1="$1"
+    local file2="$2"
+    
+    if [[ ! -f "$file1" ]]; then
+        echo -e "${RED}错误: 文件不存在: $file1${NC}"
+        exit 1
+    fi
+    if [[ ! -f "$file2" ]]; then
+        echo -e "${RED}错误: 文件不存在: $file2${NC}"
+        exit 1
+    fi
+    
+    local content1=$(cat "$file1")
+    local content2=$(cat "$file2")
+    
+    # 使用 python3 比较
+    if command -v python3 &> /dev/null; then
+        python3 << 'PYEOF'
+import json
+import sys
+
+try:
+    with open(sys.argv[1]) as f:
+        data1 = json.load(f)
+    with open(sys.argv[2]) as f:
+        data2 = json.load(f)
+    
+    if data1 == data2:
+        print("\033[32m✓ 两个 JSON 文件完全相同\033[0m")
+    else:
+        print("\033[31m✗ 两个 JSON 文件不同\033[0m")
+        
+        # 找出差异
+        def find_diff(d1, d2, path=""):
+            if isinstance(d1, dict) and isinstance(d2, dict):
+                all_keys = set(d1.keys()) | set(d2.keys())
+                for key in all_keys:
+                    new_path = f"{path}.{key}" if path else key
+                    if key not in d1:
+                        print(f"  \033[32m+ {new_path}: {d2[key]}\033[0m")
+                    elif key not in d2:
+                        print(f"  \033[31m- {new_path}: {d1[key]}\033[0m")
+                    else:
+                        find_diff(d1[key], d2[key], new_path)
+            elif isinstance(d1, list) and isinstance(d2, list):
+                max_len = max(len(d1), len(d2))
+                for i in range(max_len):
+                    new_path = f"{path}[{i}]"
+                    if i >= len(d1):
+                        print(f"  \033[32m+ {new_path}: {d2[i]}\033[0m")
+                    elif i >= len(d2):
+                        print(f"  \033[31m- {new_path}: {d1[i]}\033[0m")
+                    else:
+                        find_diff(d1[i], d2[i], new_path)
+            else:
+                if d1 != d2:
+                    print(f"  \033[31m- {path}: {d1}\033[0m")
+                    print(f"  \033[32m+ {path}: {d2}\033[0m")
+        
+        find_diff(data1, data2)
+        
+except Exception as e:
+    print(f"Error: {e}")
+PYEOF
+        "$file1" "$file2"
+    else
+        echo -e "${YELLOW}警告: 未找到 python3，使用基本比较${NC}"
+        if [[ "$content1" == "$content2" ]]; then
+            echo -e "${GREEN}✓ 两个 JSON 文件相同${NC}"
+        else
+            echo -e "${RED}✗ 两个 JSON 文件不同${NC}"
+        fi
+    fi
+}
+
+# 提取 JSON 路径
+cmd_extract() {
+    local input="$1"
+    local path="$2"
+    
+    if [[ -z "$path" ]]; then
+        echo -e "${RED}错误: 请提供提取路径 (如: users[0].name)${NC}"
+        exit 1
+    fi
+    
+    local content
+    if [[ -f "$input" ]]; then
+        content=$(cat "$input")
+    elif [[ ! -t 0 ]]; then
+        content=$(cat)
+    else
+        echo -e "${RED}错误: 请提供 JSON 文件或从 stdin 输入${NC}"
+        exit 1
+    fi
+    
+    if command -v python3 &> /dev/null; then
+        python3 << 'PYEOF'
+import json
+import sys
+
+content = sys.stdin.read() if len(sys.argv) == 1 else sys.argv[1]
+path = sys.argv[-1]
+
+try:
+    data = json.loads(content)
+    
+    # 简单路径解析
+    keys = path.replace('[', '.').replace(']', '').split('.')
+    result = data
+    
+    for key in keys:
+        if key.isdigit():
+            result = result[int(key)]
+        else:
+            result = result[key]
+    
+    if isinstance(result, (dict, list)):
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(result)
+except Exception as e:
+    print(f"Error: {e}")
+PYEOF
+        "$content" "$path"
+    else
+        echo -e "${RED}错误: 需要 python3 来提取 JSON 路径${NC}"
+        exit 1
+    fi
+}
+
+# JSON 统计信息
+cmd_stats() {
+    local input="$1"
+    local content
+    
+    if [[ -f "$input" ]]; then
+        content=$(cat "$input")
+    elif [[ ! -t 0 ]]; then
+        content=$(cat)
+    else
+        echo -e "${RED}错误: 请提供 JSON 文件或从 stdin 输入${NC}"
+        exit 1
+    fi
+    
+    if command -v python3 &> /dev/null; then
+        python3 << 'PYEOF'
+import json
+import sys
+
+content = sys.stdin.read() if len(sys.argv) == 1 else sys.argv[1]
+
+try:
+    data = json.loads(content)
+    
+    def count_items(obj):
+        if isinstance(obj, dict):
+            total = len(obj)
+            for v in obj.values():
+                total += count_items(v)
+            return total
+        elif isinstance(obj, list):
+            total = len(obj)
+            for item in obj:
+                total += count_items(item)
+            return total
+        else:
+            return 0
+    
+    def get_depth(obj, current=0):
+        if isinstance(obj, dict):
+            if not obj:
+                return current
+            return max(get_depth(v, current + 1) for v in obj.values())
+        elif isinstance(obj, list):
+            if not obj:
+                return current
+            return max(get_depth(item, current + 1) for item in obj)
+        return current
+    
+    print(f"\033[32mJSON 统计信息:\033[0m")
+    print(f"  类型: {type(data).__name__}")
+    print(f"  元素总数: {count_items(data)}")
+    print(f"  深度: {get_depth(data)}")
+    
+    if isinstance(data, dict):
+        print(f"  键数量: {len(data)}")
+        print(f"  顶层键: {', '.join(list(data.keys())[:10])}")
+        if len(data) > 10:
+            print(f"            ... (共 {len(data)} 个)")
+    elif isinstance(data, list):
+        print(f"  数组长度: {len(data)}")
+        if len(data) > 0:
+            print(f"  元素类型: {type(data[0]).__name__}")
+            
+except Exception as e:
+    print(f"Error: {e}")
+PYEOF
+        "$input"
+    else
+        echo -e "${RED}错误: 需要 python3 来获取统计信息${NC}"
+        exit 1
+    fi
+}
+
+# JSON 转 CSV
+cmd_to_csv() {
+    local input="$1"
+    local content
+    
+    if [[ -f "$input" ]]; then
+        content=$(cat "$input")
+    elif [[ ! -t 0 ]]; then
+        content=$(cat)
+    else
+        echo -e "${RED}错误: 请提供 JSON 文件或从 stdin 输入${NC}"
+        exit 1
+    fi
+    
+    if command -v python3 &> /dev/null; then
+        python3 << 'PYEOF'
+import json
+import sys
+import csv
+import io
+
+content = sys.stdin.read() if len(sys.argv) == 1 else sys.argv[1]
+
+try:
+    data = json.loads(content)
+    
+    if not isinstance(data, list):
+        print("Error: JSON 必须是数组格式才能转换为 CSV")
+        sys.exit(1)
+    
+    if len(data) == 0:
+        print("Error: JSON 数组为空")
+        sys.exit(1)
+    
+    # 获取所有键
+    keys = set()
+    for item in data:
+        if isinstance(item, dict):
+            keys.update(item.keys())
+    
+    keys = sorted(list(keys))
+    
+    # 输出 CSV
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=keys)
+    writer.writeheader()
+    
+    for item in data:
+        if isinstance(item, dict):
+            writer.writerow({k: item.get(k, '') for k in keys})
+        else:
+            writer.writerow({keys[0]: item})
+    
+    print(output.getvalue())
+    
+except Exception as e:
+    print(f"Error: {e}")
+PYEOF
+        "$input"
+    else
+        echo -e "${RED}错误: 需要 python3 来转换 CSV${NC}"
+        exit 1
+    fi
+}
+
+# 主命令处理
+case "$1" in
+    help|--help|-h)
+        show_help
+        ;;
+    version|--version|-v)
+        echo "JSON Tools v${VERSION}"
+        ;;
+    validate|check)
+        validate_json "$2"
+        ;;
+    format)
+        cmd_format "$2"
+        ;;
+    minify|compress)
+        cmd_minify "$2"
+        ;;
+    prettify|pretty)
+        cmd_prettify "$2"
+        ;;
+    compare|cmp)
+        cmd_compare "$2" "$3"
+        ;;
+    extract|get)
+        cmd_extract "$2" "$3"
+        ;;
+    stats|info)
+        cmd_stats "$2"
+        ;;
+    to-csv)
+        cmd_to_csv "$2"
+        ;;
+    diff)
+        cmd_compare "$2" "$3"
+        ;;
+    "")
+        show_help
+        ;;
+    *)
+        echo -e "${RED}错误: 未知命令 '$1'${NC}"
+        echo "运行 'json help' 查看帮助"
+        exit 1
+        ;;
+esac
